@@ -1,3 +1,4 @@
+
 pipeline {
     agent any
 
@@ -5,35 +6,37 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                git branch: 'main',
-                url: 'https://github.com/venkateprsad/devops-ecommerce-capstone.git'
+                echo 'Source code checked out from GitHub'
             }
         }
 
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build -t ecommerce-frontend:latest .'
-            }
-        }
-
-        stage('Deploy Application') {
+        stage('Build and Deploy') {
             steps {
                 sh '''
-                    docker stop ecommerce-app || true
-                    docker rm ecommerce-app || true
-                    docker run -d \
-                    --name ecommerce-app \
-                    -p 8080:80 \
-                    ecommerce-frontend:latest
+                    docker compose -p devops-ecommerce-capstone up -d --build
                 '''
             }
         }
 
-        stage('Verify Deployment') {
+        stage('Verify Containers') {
             steps {
-                sh 'sleep 5'
-                sh 'curl -f http://localhost:8080'
+                sh '''
+                    docker compose -p devops-ecommerce-capstone ps
+                    sleep 5
+                    curl -f http://localhost
+                '''
             }
         }
     }
+
+    post {
+        success {
+            echo 'E-commerce application deployed successfully!'
+        }
+
+        failure {
+            echo 'Deployment failed. Check Jenkins console output.'
+        }
+    }
 }
+
