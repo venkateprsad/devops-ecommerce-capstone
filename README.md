@@ -29,3 +29,4 @@ Next: Implement the second DevOps capstone project.
 ## Author
 DevOps Learning Project
 
+Testing Jenkins automatic trigger
