@@ -19,12 +19,12 @@ pipeline {
         STAGE_CREDENTIALS = 'stage-server-key'
 
         // Dev server - fill actual details
-        DEV_HOST = 'REPLACE_WITH_DEV_PRIVATE_IP'
+        DEV_HOST = '172.31.45.9'
         DEV_USER = 'ubuntu'
         DEV_CREDENTIALS = 'dev-server-key'
 
         // Production server - fill actual details
-        PROD_HOST = 'REPLACE_WITH_PRODUCTION_PRIVATE_IP'
+        PROD_HOST = '172.31.38.11'
         PROD_USER = 'ubuntu'
         PROD_CREDENTIALS = 'prod-server-key'
 
