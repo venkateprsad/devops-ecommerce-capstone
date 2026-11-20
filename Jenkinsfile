@@ -298,3 +298,33 @@ pipeline {
         }
     }
 }
+post {
+    success {
+        emailext(
+            subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+            body: """
+            Build Successful!
+
+            Project: ${env.JOB_NAME}
+            Build Number: ${env.BUILD_NUMBER}
+            Build URL: ${env.BUILD_URL}
+            """,
+            to: 'gochhvenkata.gmail.com'
+        )
+    }
+
+    failure {
+        emailext(
+            subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+            body: """
+            Build Failed!
+
+            Project: ${env.JOB_NAME}
+            Build Number: ${env.BUILD_NUMBER}
+            Build URL: ${env.BUILD_URL}
+            Check Jenkins Console Output for details.
+            """,
+            to: 'YOUR_GMAIL@gmail.com'
+        )
+    }
+}
