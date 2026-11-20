@@ -324,7 +324,7 @@ post {
             Build URL: ${env.BUILD_URL}
             Check Jenkins Console Output for details.
             """,
-            to: 'YOUR_GMAIL@gmail.com'
+            to: 'gochhivenkata@gmail.com'
         )
     }
 }
