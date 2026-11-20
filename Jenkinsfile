@@ -14,7 +14,7 @@ pipeline {
         ECR_URI = '270278216994.dkr.ecr.ap-southeast-2.amazonaws.com/devops-ecommerce'
 
         // Stage server
-        STAGE_HOST = '16.178.133.152'
+        STAGE_HOST = '172.31.34.249'
         STAGE_USER = 'ubuntu'
         STAGE_CREDENTIALS = 'stage-server-key'
 
