@@ -1,4 +1,3 @@
-
 pipeline {
     agent any
 
@@ -13,17 +12,17 @@ pipeline {
         AWS_ACCOUNT_ID = '270278216994'
         ECR_URI = '270278216994.dkr.ecr.ap-southeast-2.amazonaws.com/devops-ecommerce'
 
-        // Stage server
-        STAGE_HOST = '172.31.34.249'
-        STAGE_USER = 'ubuntu'
-        STAGE_CREDENTIALS = 'stage-server-key'
-
-        // Dev server - fill actual details
+        // DEV server
         DEV_HOST = '172.31.45.9'
         DEV_USER = 'ubuntu'
         DEV_CREDENTIALS = 'dev-server-key'
 
-        // Production server - fill actual details
+        // STAGE server
+        STAGE_HOST = '172.31.34.249'
+        STAGE_USER = 'ubuntu'
+        STAGE_CREDENTIALS = 'stage-server-key'
+
+        // PRODUCTION server
         PROD_HOST = '172.31.38.11'
         PROD_USER = 'ubuntu'
         PROD_CREDENTIALS = 'prod-server-key'
@@ -58,7 +57,7 @@ pipeline {
                     if [ -f requirements.txt ]; then
                         python3 -m pip install -r requirements.txt --break-system-packages
                     else
-                        echo "requirements.txt not found"
+                        echo "requirements.txt not found. Skipping dependencies."
                     fi
                 '''
             }
@@ -152,7 +151,7 @@ pipeline {
 
         stage('Deploy to DEV') {
             steps {
-                echo 'Deploying to Dev environment...'
+                echo 'Deploying to DEV environment...'
 
                 sshagent(credentials: [env.DEV_CREDENTIALS]) {
                     sh '''
@@ -171,7 +170,7 @@ pipeline {
 
         stage('Deploy to STAGE') {
             steps {
-                echo 'Deploying to Stage environment...'
+                echo 'Deploying to STAGE environment...'
 
                 sshagent(credentials: [env.STAGE_CREDENTIALS]) {
                     sh '''
@@ -179,7 +178,7 @@ pipeline {
                           $STAGE_USER@$STAGE_HOST \
                           "set -e;
                            aws ecr get-login-password --region $AWS_REGION |
-                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com;
+                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
                            docker pull $ECR_URI:$IMAGE_TAG;
                            docker rm -f $CONTAINER_NAME || true;
                            docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG"
@@ -192,7 +191,7 @@ pipeline {
             steps {
                 timeout(time: 30, unit: 'MINUTES') {
                     input(
-                        message: 'Dev and Stage deployments successful. Approve Production deployment?',
+                        message: 'DEV and STAGE deployments successful. Approve Production deployment?',
                         ok: 'Approve Production',
                         submitter: 'admin'
                     )
@@ -202,7 +201,7 @@ pipeline {
 
         stage('Deploy to PRODUCTION') {
             steps {
-                echo 'Deploying to Production environment...'
+                echo 'Deploying to PRODUCTION environment...'
 
                 sshagent(credentials: [env.PROD_CREDENTIALS]) {
                     sh '''
@@ -210,7 +209,7 @@ pipeline {
                           $PROD_USER@$PROD_HOST \
                           "set -e;
                            aws ecr get-login-password --region $AWS_REGION |
-                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com;
+                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
                            docker pull $ECR_URI:$IMAGE_TAG;
                            docker rm -f $CONTAINER_NAME || true;
                            docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG"
@@ -234,19 +233,20 @@ pipeline {
 
                     <p>Hello,</p>
 
-                    <p>Your Ecommerce application has been successfully deployed.</p>
+                    <p>Your Ecommerce application has completed the deployment pipeline.</p>
 
                     <h3>Deployment Summary</h3>
 
                     <ul>
                         <li>GitHub Checkout: SUCCESS</li>
-                        <li>Python Dependencies: SUCCESS</li>
-                        <li>Python Tests: SUCCESS</li>
+                        <li>Python Setup: SUCCESS</li>
+                        <li>Python Dependencies: SUCCESS or SKIPPED</li>
+                        <li>Python Tests: SUCCESS or SKIPPED</li>
                         <li>SonarQube Analysis: SUCCESS</li>
                         <li>Docker Build: SUCCESS</li>
                         <li>AWS ECR Push: SUCCESS</li>
-                        <li>Dev Deployment: SUCCESS</li>
-                        <li>Stage Deployment: SUCCESS</li>
+                        <li>DEV Deployment: SUCCESS</li>
+                        <li>STAGE Deployment: SUCCESS</li>
                         <li>Production Approval: GRANTED</li>
                         <li>Production Deployment: SUCCESS</li>
                     </ul>
@@ -271,7 +271,7 @@ pipeline {
                 body: """
                     <h2 style="color:red;">CI/CD Pipeline Failed!</h2>
 
-                    <p>Your Ecommerce deployment pipeline has failed.</p>
+                    <p>Your Ecommerce CI/CD pipeline has failed.</p>
 
                     <p><b>Project:</b> ${JOB_NAME}</p>
                     <p><b>Build Number:</b> ${BUILD_NUMBER}</p>
@@ -286,45 +286,23 @@ pipeline {
         }
 
         aborted {
+            echo 'Pipeline was aborted.'
+
             emailext(
                 to: "${NOTIFY_EMAIL}",
                 subject: "ABORTED: Ecommerce CI/CD Build #${BUILD_NUMBER}",
-                body: "The pipeline was aborted or the approval timed out. Check ${BUILD_URL}"
+                mimeType: 'text/html',
+                body: """
+                    <h2>CI/CD Pipeline Aborted</h2>
+                    <p>The pipeline was aborted or production approval timed out.</p>
+                    <p><b>Build:</b> ${BUILD_NUMBER}</p>
+                    <p><a href="${BUILD_URL}">View Jenkins Build</a></p>
+                """
             )
         }
 
         always {
             echo 'Jenkins pipeline execution completed.'
         }
-    }
-}
-post {
-    success {
-        emailext(
-            subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-            body: """
-            Build Successful!
-
-            Project: ${env.JOB_NAME}
-            Build Number: ${env.BUILD_NUMBER}
-            Build URL: ${env.BUILD_URL}
-            """,
-            to: 'gochhvenkata.gmail.com'
-        )
-    }
-
-    failure {
-        emailext(
-            subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
-            body: """
-            Build Failed!
-
-            Project: ${env.JOB_NAME}
-            Build Number: ${env.BUILD_NUMBER}
-            Build URL: ${env.BUILD_URL}
-            Check Jenkins Console Output for details.
-            """,
-            to: 'gochhivenkata@gmail.com'
-        )
     }
 }
