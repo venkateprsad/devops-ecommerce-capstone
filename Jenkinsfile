@@ -88,7 +88,8 @@ pipeline {
                             -Dsonar.projectName=devops-ecommerce \
                             -Dsonar.sources=. \
                             -Dsonar.exclusions=venv/**,.venv/**,**/__pycache__/**,**/tests/** \
-                            -Dsonar.sourceEncoding=UTF-8
+                            -Dsonar.sourceEncoding=UTF-8 \
+                            -Dsonar.python.version=3.12
                         """
                     }
                 }
@@ -162,7 +163,10 @@ pipeline {
                            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com;
                            docker pull $ECR_URI:$IMAGE_TAG;
                            docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG"
+                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
+                           sleep 5;
+                           curl -fsS http://localhost/ >/dev/null;
+                           echo DEV deployment health check passed"
                     '''
                 }
             }
@@ -181,7 +185,10 @@ pipeline {
                            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
                            docker pull $ECR_URI:$IMAGE_TAG;
                            docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG"
+                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
+                           sleep 5;
+                           curl -fsS http://localhost/ >/dev/null;
+                           echo STAGE deployment health check passed"
                     '''
                 }
             }
@@ -212,7 +219,10 @@ pipeline {
                            docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
                            docker pull $ECR_URI:$IMAGE_TAG;
                            docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG"
+                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
+                           sleep 5;
+                           curl -fsS http://localhost/ >/dev/null;
+                           echo PRODUCTION deployment health check passed"
                     '''
                 }
             }
@@ -226,6 +236,7 @@ pipeline {
 
             emailext(
                 to: "${NOTIFY_EMAIL}",
+                from: "gochhivenkata@gmail.com",
                 subject: "SUCCESS: Ecommerce CI/CD Build #${BUILD_NUMBER}",
                 mimeType: 'text/html',
                 body: """
@@ -233,7 +244,7 @@ pipeline {
 
                     <p>Hello,</p>
 
-                    <p>Your Ecommerce application has completed the deployment pipeline.</p>
+                    <p>Your Ecommerce application has completed the deployment pipeline successfully.</p>
 
                     <h3>Deployment Summary</h3>
 
@@ -266,6 +277,7 @@ pipeline {
 
             emailext(
                 to: "${NOTIFY_EMAIL}",
+                from: "gochhivenkata@gmail.com",
                 subject: "FAILED: Ecommerce CI/CD Build #${BUILD_NUMBER}",
                 mimeType: 'text/html',
                 body: """
@@ -278,6 +290,7 @@ pipeline {
                     <p><b>Status:</b> FAILURE</p>
 
                     <p>Please check Jenkins console output:</p>
+
                     <a href="${BUILD_URL}console">${BUILD_URL}console</a>
 
                     <p>Regards,<br>DevOps CI/CD Pipeline</p>
@@ -290,17 +303,24 @@ pipeline {
 
             emailext(
                 to: "${NOTIFY_EMAIL}",
+                from: "gochhivenkata@gmail.com",
                 subject: "ABORTED: Ecommerce CI/CD Build #${BUILD_NUMBER}",
                 mimeType: 'text/html',
                 body: """
-                    <h2>CI/CD Pipeline Aborted</h2>
+                    <h2 style="color:orange;">CI/CD Pipeline Aborted</h2>
+
                     <p>The pipeline was aborted or production approval timed out.</p>
-                    <p><b>Build:</b> ${BUILD_NUMBER}</p>
+
+                    <p><b>Project:</b> ${JOB_NAME}</p>
+                    <p><b>Build Number:</b> ${BUILD_NUMBER}</p>
+                    <p><b>Status:</b> ABORTED</p>
+
                     <p><a href="${BUILD_URL}">View Jenkins Build</a></p>
+
+                    <p>Regards,<br>DevOps CI/CD Pipeline</p>
                 """
             )
         }
-        
 
         always {
             echo 'Jenkins pipeline execution completed.'
