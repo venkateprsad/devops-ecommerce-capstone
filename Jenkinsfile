@@ -232,46 +232,25 @@ pipeline {
     post {
 
         success {
-            echo 'E-commerce CI/CD pipeline completed successfully!'
+    echo 'Pipeline completed successfully!'
 
-            emailext(
-                to: "${NOTIFY_EMAIL}",
-                from: "gochhivenkata@gmail.com",
-                subject: "SUCCESS: Ecommerce CI/CD Build #${BUILD_NUMBER}",
-                mimeType: 'text/html',
-                body: """
-                    <h2 style="color:green;">CI/CD Pipeline Successful!</h2>
-
-                    <p>Hello,</p>
-
-                    <p>Your Ecommerce application has completed the deployment pipeline successfully.</p>
-
-                    <h3>Deployment Summary</h3>
-
-                    <ul>
-                        <li>GitHub Checkout: SUCCESS</li>
-                        <li>Python Setup: SUCCESS</li>
-                        <li>Python Dependencies: SUCCESS or SKIPPED</li>
-                        <li>Python Tests: SUCCESS or SKIPPED</li>
-                        <li>SonarQube Analysis: SUCCESS</li>
-                        <li>Docker Build: SUCCESS</li>
-                        <li>AWS ECR Push: SUCCESS</li>
-                        <li>DEV Deployment: SUCCESS</li>
-                        <li>STAGE Deployment: SUCCESS</li>
-                        <li>Production Approval: GRANTED</li>
-                        <li>Production Deployment: SUCCESS</li>
-                    </ul>
-
-                    <p><b>Project:</b> ${JOB_NAME}</p>
-                    <p><b>Build Number:</b> ${BUILD_NUMBER}</p>
-                    <p><b>Docker Image:</b> ${ECR_URI}:${IMAGE_TAG}</p>
-                    <p><b>Build URL:</b> <a href="${BUILD_URL}">${BUILD_URL}</a></p>
-
-                    <p>Regards,<br>DevOps CI/CD Pipeline</p>
-                """
-            )
-        }
-
+    emailext(
+        to: 'gochhivenkata@gmail.com',
+        subject: "SUCCESS: ${JOB_NAME} - Build #${BUILD_NUMBER}",
+        mimeType: 'text/html',
+        body: """
+            <h2 style="color:green;">Build Successful!</h2>
+            <p>Project: ${JOB_NAME}</p>
+            <p>Build Number: ${BUILD_NUMBER}</p>
+            <p>Build Status: ${currentBuild.currentResult}</p>
+            <p>Build Duration: ${currentBuild.durationString}</p>
+            <p>Docker Image: ${ECR_URI}:${IMAGE_TAG}</p>
+            <p>
+                <a href="${BUILD_URL}">View Jenkins Build</a>
+            </p>
+        """
+    )
+}
         failure {
             echo 'Pipeline failed. Check Jenkins console output.'
 
