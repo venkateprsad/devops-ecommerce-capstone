@@ -1,3 +1,134 @@
+
+def deployWithRollback(String targetHost, String targetUser,
+                       String credentialId, String environmentName) {
+    withEnv([
+        "TARGET_HOST=${targetHost}",
+        "TARGET_USER=${targetUser}",
+        "DEPLOY_ENV=${environmentName}"
+    ]) {
+        sshagent(credentials: [credentialId]) {
+            sh '''
+                set -eu
+
+                echo "Deploying to $DEPLOY_ENV..."
+
+                ssh -o StrictHostKeyChecking=no \
+                    "$TARGET_USER@$TARGET_HOST" \
+                    "bash -s -- '$ECR_URI:$IMAGE_TAG' '$CONTAINER_NAME' '$AWS_REGION' '$AWS_ACCOUNT_ID' '$DEPLOY_ENV'" <<'REMOTE'
+set -eu
+
+NEW_IMAGE="$1"
+CONTAINER_NAME="$2"
+AWS_REGION="$3"
+AWS_ACCOUNT_ID="$4"
+ENVIRONMENT="$5"
+
+ECR_REGISTRY="$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
+
+echo "Environment: $ENVIRONMENT"
+echo "New image: $NEW_IMAGE"
+
+# Remember the currently running image
+OLD_IMAGE=$(docker inspect \
+    --format='{{.Config.Image}}' \
+    "$CONTAINER_NAME" 2>/dev/null || true)
+
+echo "Previous image: ${OLD_IMAGE:-NONE}"
+
+# Login to AWS ECR
+aws ecr get-login-password --region "$AWS_REGION" |
+    docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+# Download the new image
+docker pull "$NEW_IMAGE"
+
+# Download the previous image too, if needed for rollback
+if [ -n "$OLD_IMAGE" ]; then
+    docker pull "$OLD_IMAGE" || {
+        echo "WARNING: Previous image could not be downloaded."
+        echo "Rollback may not be possible."
+    }
+fi
+
+# Rollback function
+rollback() {
+    echo "=================================="
+    echo "DEPLOYMENT FAILED - ROLLBACK"
+    echo "=================================="
+
+    docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+    if [ -n "$OLD_IMAGE" ] && docker image inspect "$OLD_IMAGE" >/dev/null 2>&1; then
+        echo "Restoring previous image: $OLD_IMAGE"
+
+        if docker run -d \
+            --restart unless-stopped \
+            --name "$CONTAINER_NAME" \
+            -p 80:80 \
+            "$OLD_IMAGE"; then
+
+            echo "Checking previous application..."
+
+            for attempt in $(seq 1 12); do
+                if curl -fsS --max-time 5 http://localhost/ >/dev/null; then
+                    echo "Previous version restored and healthy."
+                    return 0
+                fi
+                sleep 5
+            done
+
+            echo "WARNING: Previous container started but health check failed."
+            return 1
+        fi
+    fi
+
+    echo "No usable previous image available."
+    return 1
+}
+
+# Stop old container and deploy new container
+docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
+
+if ! docker run -d \
+    --restart unless-stopped \
+    --name "$CONTAINER_NAME" \
+    -p 80:80 \
+    "$NEW_IMAGE"; then
+
+    rollback || true
+    exit 1
+fi
+
+# Application health check
+HEALTHY=0
+
+for attempt in $(seq 1 12); do
+    echo "Health check attempt $attempt of 12"
+
+    if curl -fsS --max-time 5 http://localhost/ >/dev/null; then
+        HEALTHY=1
+        break
+    fi
+
+    sleep 5
+done
+
+# Deployment result
+if [ "$HEALTHY" -eq 1 ]; then
+    echo "$ENVIRONMENT deployment successful!"
+else
+    echo "$ENVIRONMENT deployment failed!"
+
+    rollback || true
+    exit 1
+fi
+
+REMOTE
+            '''
+        }
+    }
+}
+
 pipeline {
     agent any
 
@@ -12,17 +143,15 @@ pipeline {
         AWS_ACCOUNT_ID = '270278216994'
         ECR_URI = '270278216994.dkr.ecr.ap-southeast-2.amazonaws.com/devops-ecommerce'
 
-        // DEV server
+        // Servers
         DEV_HOST = '172.31.45.9'
         DEV_USER = 'ubuntu'
         DEV_CREDENTIALS = 'dev-server-key'
 
-        // STAGE server
         STAGE_HOST = '172.31.34.249'
         STAGE_USER = 'ubuntu'
         STAGE_CREDENTIALS = 'stage-server-key'
 
-        // PRODUCTION server
         PROD_HOST = '172.31.38.11'
         PROD_USER = 'ubuntu'
         PROD_CREDENTIALS = 'prod-server-key'
@@ -35,29 +164,26 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                echo 'Checking out source code...'
                 checkout scm
             }
         }
 
         stage('Python Setup') {
             steps {
-                echo 'Checking Python version...'
                 sh '''
                     python3 --version
-                    pip3 --version
+                    python3 -m venv venv
                 '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                echo 'Installing Python dependencies...'
                 sh '''
+                    . venv/bin/activate
+                    pip install --upgrade pip
                     if [ -f requirements.txt ]; then
-                        python3 -m pip install -r requirements.txt --break-system-packages
-                    else
-                        echo "requirements.txt not found. Skipping dependencies."
+                        pip install -r requirements.txt
                     fi
                 '''
             }
@@ -65,10 +191,10 @@ pipeline {
 
         stage('Python Tests') {
             steps {
-                echo 'Running Python tests...'
                 sh '''
+                    . venv/bin/activate
                     if [ -d tests ]; then
-                        python3 -m pytest tests/ || exit 1
+                        python -m pytest tests/ -v
                     else
                         echo "No tests directory found. Skipping tests."
                     fi
@@ -78,20 +204,13 @@ pipeline {
 
         stage('SonarQube Code Analysis') {
             steps {
-                script {
-                    def scannerHome = tool 'SonarScanner'
-
-                    withSonarQubeEnv('SonarQube') {
-                        sh """
-                            ${scannerHome}/bin/sonar-scanner \
-                            -Dsonar.projectKey=${SONAR_PROJECT_KEY} \
-                            -Dsonar.projectName=devops-ecommerce \
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        sonar-scanner \
+                            -Dsonar.projectKey=$SONAR_PROJECT_KEY \
                             -Dsonar.sources=. \
-                            -Dsonar.exclusions=venv/**,.venv/**,**/__pycache__/**,**/tests/** \
-                            -Dsonar.sourceEncoding=UTF-8 \
-                            -Dsonar.python.version=3.12
-                        """
-                    }
+                            -Dsonar.exclusions=venv/**,**/__pycache__/**,.git/**
+                    '''
                 }
             }
         }
@@ -99,15 +218,13 @@ pipeline {
         stage('Docker Build') {
             steps {
                 script {
-                    env.IMAGE_TAG = env.BUILD_NUMBER
+                    env.IMAGE_TAG = "${env.BUILD_NUMBER}"
                 }
-
-                echo 'Building Docker image...'
 
                 sh '''
                     docker build \
-                      -t ${IMAGE_NAME}:${IMAGE_TAG} \
-                      -t ${IMAGE_NAME}:latest .
+                        -t $IMAGE_NAME:$IMAGE_TAG \
+                        -t $IMAGE_NAME:latest .
                 '''
             }
         }
@@ -115,7 +232,7 @@ pipeline {
         stage('Docker Image Check') {
             steps {
                 sh '''
-                    docker images | grep devops-ecommerce
+                    docker images | grep "$IMAGE_NAME"
                 '''
             }
         }
@@ -123,12 +240,11 @@ pipeline {
         stage('AWS ECR Login') {
             steps {
                 sh '''
-                    aws ecr get-login-password \
-                      --region $AWS_REGION | \
+                    aws ecr get-login-password --region "$AWS_REGION" |
                     docker login \
-                      --username AWS \
-                      --password-stdin \
-                      $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+                        --username AWS \
+                        --password-stdin \
+                        "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
                 '''
             }
         }
@@ -137,12 +253,12 @@ pipeline {
             steps {
                 sh '''
                     docker tag \
-                      $IMAGE_NAME:$IMAGE_TAG \
-                      $ECR_URI:$IMAGE_TAG
+                        $IMAGE_NAME:$IMAGE_TAG \
+                        $ECR_URI:$IMAGE_TAG
 
                     docker tag \
-                      $IMAGE_NAME:latest \
-                      $ECR_URI:latest
+                        $IMAGE_NAME:$IMAGE_TAG \
+                        $ECR_URI:latest
 
                     docker push $ECR_URI:$IMAGE_TAG
                     docker push $ECR_URI:latest
@@ -150,154 +266,123 @@ pipeline {
             }
         }
 
+        // DEV deployment with automatic rollback
         stage('Deploy to DEV') {
             steps {
-                echo 'Deploying to DEV environment...'
-
-                sshagent(credentials: [env.DEV_CREDENTIALS]) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no \
-                          $DEV_USER@$DEV_HOST \
-                          "set -e;
-                           aws ecr get-login-password --region $AWS_REGION |
-                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com;
-                           docker pull $ECR_URI:$IMAGE_TAG;
-                           docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
-                           sleep 5;
-                           curl -fsS http://localhost/ >/dev/null;
-                           echo DEV deployment health check passed"
-                    '''
-                }
-            }
-        }
-
-        stage('Deploy to STAGE') {
-            steps {
-                echo 'Deploying to STAGE environment...'
-
-                sshagent(credentials: [env.STAGE_CREDENTIALS]) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no \
-                          $STAGE_USER@$STAGE_HOST \
-                          "set -e;
-                           aws ecr get-login-password --region $AWS_REGION |
-                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
-                           docker pull $ECR_URI:$IMAGE_TAG;
-                           docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
-                           sleep 5;
-                           curl -fsS http://localhost/ >/dev/null;
-                           echo STAGE deployment health check passed"
-                    '''
-                }
-            }
-        }
-
-        stage('Production Approval') {
-            steps {
-                timeout(time: 30, unit: 'MINUTES') {
-                    input(
-                        message: 'DEV and STAGE deployments successful. Approve Production deployment?',
-                        ok: 'Approve Production',
-                        submitter: 'admin'
+                script {
+                    deployWithRollback(
+                        env.DEV_HOST,
+                        env.DEV_USER,
+                        env.DEV_CREDENTIALS,
+                        'DEV'
                     )
                 }
             }
         }
 
+        // STAGE deployment with automatic rollback
+        stage('Deploy to STAGE') {
+            steps {
+                script {
+                    deployWithRollback(
+                        env.STAGE_HOST,
+                        env.STAGE_USER,
+                        env.STAGE_CREDENTIALS,
+                        'STAGE'
+                    )
+                }
+            }
+        }
+
+        // Production approval
+        stage('Production Approval') {
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: 'DEV and STAGE deployments completed. Approve production deployment?',
+                          ok: 'Deploy to Production'
+                }
+            }
+        }
+
+        // PROD deployment with automatic rollback
         stage('Deploy to PRODUCTION') {
             steps {
-                echo 'Deploying to PRODUCTION environment...'
-
-                sshagent(credentials: [env.PROD_CREDENTIALS]) {
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no \
-                          $PROD_USER@$PROD_HOST \
-                          "set -e;
-                           aws ecr get-login-password --region $AWS_REGION |
-                           docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.ap-southeast-2.amazonaws.com;
-                           docker pull $ECR_URI:$IMAGE_TAG;
-                           docker rm -f $CONTAINER_NAME || true;
-                           docker run -d --restart unless-stopped --name $CONTAINER_NAME -p 80:80 $ECR_URI:$IMAGE_TAG;
-                           sleep 5;
-                           curl -fsS http://localhost/ >/dev/null;
-                           echo PRODUCTION deployment health check passed"
-                    '''
+                script {
+                    deployWithRollback(
+                        env.PROD_HOST,
+                        env.PROD_USER,
+                        env.PROD_CREDENTIALS,
+                        'PRODUCTION'
+                    )
                 }
             }
         }
     }
 
     post {
-
         success {
-    echo 'Pipeline completed successfully!'
+            emailext(
+                to: 'gochhivenkata@gmail.com',
+                subject: "SUCCESS: E-commerce CI/CD Build #${BUILD_NUMBER}",
+                body: """
+Hello,
 
-    emailext(
-        to: 'gochhivenkata@gmail.com',
-        subject: "SUCCESS: ${JOB_NAME} - Build #${BUILD_NUMBER}",
-        mimeType: 'text/html',
-        body: """
-            <h2 style="color:green;">Build Successful!</h2>
-            <p>Project: ${JOB_NAME}</p>
-            <p>Build Number: ${BUILD_NUMBER}</p>
-            <p>Build Status: ${currentBuild.currentResult}</p>
-            <p>Build Duration: ${currentBuild.durationString}</p>
-            <p>Docker Image: ${ECR_URI}:${IMAGE_TAG}</p>
-            <p>
-                <a href="${BUILD_URL}">View Jenkins Build</a>
-            </p>
-        """
-    )
-}
+Your E-commerce CI/CD pipeline completed successfully.
+
+Build Number: ${BUILD_NUMBER}
+Build URL: ${BUILD_URL}
+
+Deployment:
+DEV: Successful
+STAGE: Successful
+PRODUCTION: Successful
+
+Docker Image:
+${ECR_URI}:${IMAGE_TAG}
+
+Regards,
+Jenkins CI/CD Pipeline
+"""
+            )
+        }
+
         failure {
-            echo 'Pipeline failed. Check Jenkins console output.'
-
             emailext(
                 to: "${NOTIFY_EMAIL}",
-                from: "gochhivenkata@gmail.com",
-                subject: "FAILED: Ecommerce CI/CD Build #${BUILD_NUMBER}",
-                mimeType: 'text/html',
+                subject: "FAILED: E-commerce CI/CD Build #${BUILD_NUMBER}",
                 body: """
-                    <h2 style="color:red;">CI/CD Pipeline Failed!</h2>
+Hello,
 
-                    <p>Your Ecommerce CI/CD pipeline has failed.</p>
+Your E-commerce CI/CD pipeline has FAILED.
 
-                    <p><b>Project:</b> ${JOB_NAME}</p>
-                    <p><b>Build Number:</b> ${BUILD_NUMBER}</p>
-                    <p><b>Status:</b> FAILURE</p>
+Build Number: ${BUILD_NUMBER}
+Build URL: ${BUILD_URL}
 
-                    <p>Please check Jenkins console output:</p>
+Please check the Jenkins console output.
 
-                    <a href="${BUILD_URL}console">${BUILD_URL}console</a>
+If deployment failed, automatic rollback was attempted on the affected server.
 
-                    <p>Regards,<br>DevOps CI/CD Pipeline</p>
-                """
+Regards,
+Jenkins CI/CD Pipeline
+"""
             )
         }
 
         aborted {
-            echo 'Pipeline was aborted.'
-
             emailext(
                 to: "${NOTIFY_EMAIL}",
-                from: "gochhivenkata@gmail.com",
-                subject: "ABORTED: Ecommerce CI/CD Build #${BUILD_NUMBER}",
-                mimeType: 'text/html',
+                subject: "ABORTED: E-commerce CI/CD Build #${BUILD_NUMBER}",
                 body: """
-                    <h2 style="color:orange;">CI/CD Pipeline Aborted</h2>
+Hello,
 
-                    <p>The pipeline was aborted or production approval timed out.</p>
+Your E-commerce CI/CD pipeline was ABORTED.
 
-                    <p><b>Project:</b> ${JOB_NAME}</p>
-                    <p><b>Build Number:</b> ${BUILD_NUMBER}</p>
-                    <p><b>Status:</b> ABORTED</p>
+Build Number: ${BUILD_NUMBER}
+Build URL: ${BUILD_URL}
 
-                    <p><a href="${BUILD_URL}">View Jenkins Build</a></p>
-
-                    <p>Regards,<br>DevOps CI/CD Pipeline</p>
-                """
+Regards,
+Jenkins CI/CD Pipeline
+"""
             )
         }
 
